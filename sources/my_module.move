@@ -3,7 +3,12 @@ module custom_transfer::my_module {
     use sui::object::{Self, UID};
     use sui::transfer;
     use sui::tx_context::{Self, TxContext};
+    use sui::coin::{Self, Coin};
+    use sui::balance::{Self, Balance};
+    use sui::sui::SUI;
 
+
+    const MIN_FEE: u64 = 1000;
     // Part 2: struct definitions
     struct Sword has key, store {
         id: UID,
@@ -14,6 +19,13 @@ module custom_transfer::my_module {
     struct Forge has key, store {
         id: UID,
         swords_created: u64,
+    }
+
+    struct SwordWrapper has key {
+        id: UID,
+        original_owner: address,
+        to_swap: Sword,
+        fee: Balance<SUI>,
     }
 
     // Part 3: module initializer to be executed when this module is published
@@ -67,6 +79,48 @@ module custom_transfer::my_module {
         use sui::transfer;
         // transfer the sword
         transfer::transfer(sword, recipient);
+    }
+
+    public entry fun request_swap(sword: Sword, fee: Coin<SUI>, service_address: address, ctx: &mut TxContext) {
+        assert!(coin::value(&fee) >= MIN_FEE, 0);
+        let wrapper = SwordWrapper {
+            id: object::new(ctx),
+            original_owner: tx_context::sender(ctx),
+            to_swap: sword,
+            fee: coin::into_balance(fee),
+        };
+        transfer::transfer(wrapper, service_address);
+    }
+
+    public entry fun execute_swap(wrapper1: SwordWrapper, wrapper2: SwordWrapper, ctx: &mut TxContext) {
+
+        // Unpack both wrappers, cross send them to the other owner.
+        let SwordWrapper {
+            id: id1,
+            original_owner: original_owner1,
+            to_swap: object1,
+            fee: fee1,
+        } = wrapper1;
+
+        let SwordWrapper {
+            id: id2,
+            original_owner: original_owner2,
+            to_swap: object2,
+            fee: fee2,
+        } = wrapper2;
+
+        // Perform the swap.
+        transfer::transfer(object1, original_owner2);
+        transfer::transfer(object2, original_owner1);
+
+        // Service provider takes the fee.
+        let service_address = tx_context::sender(ctx);
+        balance::join(&mut fee1, fee2);
+        transfer::transfer(coin::from_balance(fee1, ctx), service_address);
+
+        // Effectively delete the wrapper objects.
+        object::delete(id1);
+        object::delete(id2);
     }
 
     // part 5: public/ entry functions (introduced later in the tutorial)
